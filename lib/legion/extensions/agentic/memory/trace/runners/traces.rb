@@ -74,6 +74,20 @@ module Legion
                 { deleted: true, trace_id: trace_id }
               end
 
+              def erase_partner!(identity:, store: nil, **)
+                store ||= default_store
+                partner_result = store.retrieve_by_domain("partner:#{identity}", min_strength: 0.0, limit: 10_000)
+                owner_result   = store.retrieve_by_domain("owner:#{identity}",   min_strength: 0.0, limit: 10_000)
+                traces_to_erase = Array(partner_result) + Array(owner_result)
+
+                traces_to_erase.each { |t| store.delete(t[:trace_id]) }
+                persist_store(store) unless traces_to_erase.empty?
+
+                count = traces_to_erase.size
+                log.info("[memory] erase_partner! identity=#{identity} erased=#{count}")
+                { erased: true, identity: identity, count: count }
+              end
+
               def retrieve_and_reinforce(limit: 10, store: nil, **)
                 store ||= default_store
                 all = store.all_traces(min_strength: 0.1)
