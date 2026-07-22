@@ -25,6 +25,10 @@ Legion/HelperMigration/DirectData:
 Legion/HelperMigration/OldLoggingMethods:
   Enabled: false
 
+# Memory trace types (semantic/episodic/procedural) are NOT LLM taxonomy types
+Legion/Llm/TaxonomyEnum:
+  Enabled: false
+
 # ErrorTracer intentionally spawns a single long-lived worker thread for async DB writes
 ThreadSafety/NewThread:
   Exclude:
@@ -34,3 +38,9 @@ ThreadSafety/NewThread:
 Legion/RescueLogging/NoCapture:
   Exclude:
     - 'lib/**/error_tracer.rb'
+
+# ErrorTracer uses loop do intentionally for its long-lived async worker thread
+Legion/Llm/NoLoopDo:
+  Exclude:
+    - 'lib/**/error_tracer.rb'
+    - 'spec/**/error_tracer_spec.rb'
