@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.41] - 2026-07-22
+### Added
+- `Runners::Traces#erase_partner!(identity:)` — deletes all traces tagged `partner:<identity>` and `owner:<identity>`; returns `{ erased: true, identity:, count: }`. Prep for H8 death protocol cascade (Phase 4.5 contract gate gap).
+
 ## [0.1.40] - 2026-06-17
 ### Fixed
 - **Critical performance fix:** Trace store `snapshot_dirty_state` no longer serializes ALL traces to JSON on every flush — replaced boolean `@traces_dirty` flag with per-trace `@dirty_trace_ids` Set so only modified traces are serialized (O(changed) instead of O(total))
