@@ -50,7 +50,7 @@ module Legion
                 Helpers::PostgresStore.new(tenant_id: resolve_tenant_id, agent_id: resolve_agent_id)
               elsif defined?(Legion::Cache) && Legion::Cache.respond_to?(:connected?) && Legion::Cache.connected?
                 Legion::Logging.debug '[memory] Using shared CacheStore (memcached)'
-                Helpers::CacheStore.new
+                Helpers::CacheStore.new(partition_id: resolve_agent_id)
               else
                 Legion::Logging.debug '[memory] Using agent-local in-memory Store'
                 Helpers::Store.new(partition_id: resolve_agent_id)

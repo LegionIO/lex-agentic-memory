@@ -30,7 +30,7 @@ module Legion
                 { found: true, reinforced: true, trace_id: trace_id, new_strength: new_strength }
               end
 
-              def decay_cycle(store: nil, tick_count: 1, maintenance: true, **)
+              def decay_cycle(store: nil, tick_count: nil, maintenance: true, **)
                 unless maintenance
                   deferred = deferred_decay_summary(store || cached_default_store)
                   return { **deferred }
@@ -40,23 +40,29 @@ module Legion
                 decayed = 0
                 pruned = 0
                 total = trace_count(store)
+                now = Time.now.utc
 
                 store.all_traces.each do |trace|
                   next if trace[:base_decay_rate].zero?
 
+                  # Explicit tick_count is an age override; actor maintenance derives age from persisted access time.
+                  ticks_since_access = tick_count || [(now - Helpers::Decay.ensure_time(trace[:last_reinforced])) /
+                    Helpers::Decay::TICK_INTERVAL, 0].max
+
                   new_strength = Helpers::Decay.compute_decay(
                     peak_strength:       trace[:peak_strength],
                     base_decay_rate:     trace[:base_decay_rate],
-                    ticks_since_access:  tick_count,
+                    ticks_since_access:  ticks_since_access,
                     emotional_intensity: trace[:emotional_intensity]
                   )
+                  new_strength = [trace[:strength], new_strength].min
 
                   if new_strength <= Helpers::Trace::PRUNE_THRESHOLD
                     store.delete(trace[:trace_id])
                     pruned += 1
                   else
                     trace[:strength] = new_strength
-                    trace[:last_decayed] = Time.now.utc
+                    trace[:last_decayed] = now
                     store.store(trace)
                     decayed += 1
                   end
@@ -70,7 +76,7 @@ module Legion
                   pruned:        pruned,
                   total:         total,
                   remaining:     remaining,
-                  maintained_at: Time.now.utc
+                  maintained_at: now
                 }
                 Legion::Extensions::Agentic::Memory::Trace.record_maintenance_summary(summary.dup)
 

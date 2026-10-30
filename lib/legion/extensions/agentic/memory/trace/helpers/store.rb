@@ -46,7 +46,9 @@ module Legion
               def delete(trace_id)
                 @mutex.synchronize do
                   removed_trace = @traces.delete(trace_id)
-                  @traces.each_value { |trace| trace[:associated_traces]&.delete(trace_id) }
+                  @traces.each_value do |trace|
+                    @dirty_trace_ids << trace[:trace_id] if trace[:associated_traces]&.delete(trace_id)
+                  end
 
                   removed_links = @associations.delete(trace_id)
                   @associations.each_value { |links| links.delete(trace_id) }

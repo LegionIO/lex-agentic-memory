@@ -102,6 +102,48 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Runners::Consolidatio
       expect(result[:decayed]).to be >= 1
     end
 
+    it 'continues the same power-law aging across repeated maintenance and snapshot restore' do
+      started_at = Time.utc(2026, 10, 29)
+      allow(Time).to receive(:now).and_return(started_at)
+      store = Legion::Extensions::Agentic::Memory::Trace::Helpers::Store.new
+      stored = client.store_trace(type: :semantic, content_payload: {}, store: store)
+      id = stored[:trace_id]
+
+      allow(Time).to receive(:now).and_return(started_at + 60)
+      client.decay_cycle(store: store)
+      first_strength = store.get(id)[:strength]
+      expect(first_strength).to be_within(1e-12).of(0.5 * (2.0**-0.01))
+
+      restored = Legion::Extensions::Agentic::Memory::Trace::Helpers::Store.new
+      restored.restore_traces(Marshal.load(Marshal.dump(store.all_traces)))
+      allow(Time).to receive(:now).and_return(started_at + 120)
+      client.decay_cycle(store: restored)
+
+      expect(restored.get(id)[:strength]).to be_within(1e-12).of(0.5 * (3.0**-0.01))
+      expect(restored.get(id)[:strength]).to be < first_strength
+      second_strength = restored.get(id)[:strength]
+      client.decay_cycle(store: restored)
+      expect(restored.get(id)[:strength]).to eq(second_strength)
+    end
+
+    it 'restarts aging from explicit reinforcement without restoring historical peak strength during maintenance' do
+      started_at = Time.utc(2026, 10, 29)
+      allow(Time).to receive(:now).and_return(started_at)
+      id = client.store_trace(type: :semantic, content_payload: {})[:trace_id]
+
+      client.decay_cycle(tick_count: 100)
+      aged_strength = client.get_trace(trace_id: id)[:trace][:strength]
+      client.decay_cycle
+      expect(client.get_trace(trace_id: id)[:trace][:strength]).to eq(aged_strength)
+
+      allow(Time).to receive(:now).and_return(started_at + 120)
+      reinforced = client.reinforce(trace_id: id)[:new_strength]
+      allow(Time).to receive(:now).and_return(started_at + 180)
+      client.decay_cycle
+
+      expect(client.get_trace(trace_id: id)[:trace][:strength]).to be_within(1e-12).of(reinforced * (2.0**-0.01))
+    end
+
     it 'prunes traces below threshold' do
       stored = client.store_trace(type: :sensory, content_payload: {})
       trace = client.get_trace(trace_id: stored[:trace_id])
@@ -109,7 +151,8 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Runners::Consolidatio
       trace[:trace][:peak_strength] = 0.005
 
       result = client.decay_cycle(tick_count: 100_000)
-      expect(result[:pruned]).to be >= 0
+      expect(result[:pruned]).to eq(1)
+      expect(client.get_trace(trace_id: stored[:trace_id])[:found]).to be false
     end
   end
 

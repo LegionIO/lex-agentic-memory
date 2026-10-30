@@ -46,12 +46,13 @@ module Legion
                 { count: traces.size, traces: traces }
               end
 
-              def retrieve_ranked(trace_ids: [], store: nil, query_time: nil, **)
+              def retrieve_ranked(trace_ids: [], store: nil, query_time: nil, domain_tag: nil, **scope)
                 store ||= default_store
                 query_time ||= Time.now.utc
                 associated_set = Set.new
 
-                traces = trace_ids.filter_map { |id| store.get(id) }
+                traces = trace_ids.uniq.filter_map { |id| store.get(id) }
+                traces = filter_trace_candidates(traces: traces, domain_tag: domain_tag, **scope)
                 traces.each { |t| associated_set.merge(t[:associated_traces]) }
 
                 scored = traces.map do |t|
@@ -88,10 +89,15 @@ module Legion
                 { erased: true, identity: identity, count: count }
               end
 
-              def retrieve_and_reinforce(limit: 10, store: nil, **)
+              def retrieve_and_reinforce(limit: 10, store: nil, trace_ids: nil, domain_tag: nil, **scope)
                 store ||= default_store
-                all = store.all_traces(min_strength: 0.1)
-                top = all.sort_by { |t| -t[:strength] }.first(limit)
+                candidates = if trace_ids
+                               trace_ids.uniq.filter_map { |id| store.get(id) }.select { |trace| trace[:strength] >= 0.1 }
+                             else
+                               store.all_traces(min_strength: 0.1)
+                             end
+                candidates = filter_trace_candidates(traces: candidates, domain_tag: domain_tag, **scope)
+                top = candidates.sort_by { |trace| -trace[:strength] }.first(limit)
 
                 top.each do |trace|
                   next if trace[:base_decay_rate].zero? # skip firmware
@@ -103,11 +109,29 @@ module Legion
 
                 persist_store(store) unless top.empty?
 
-                log.debug("[memory] retrieve_and_reinforce: retrieved=#{top.size} from=#{all.size} total")
+                log.debug("[memory] retrieve_and_reinforce: retrieved=#{top.size} from=#{candidates.size} candidates")
                 { count: top.size, traces: top }
               end
 
               private
+
+              def filter_trace_candidates(traces:, domain_tag:, **scope)
+                return traces unless domain_tag || scope.key?(:identity) # rubocop:disable Legion/Extension/RunnerReturnHash -- Private helper returns candidate arrays.
+
+                traces.select do |trace|
+                  tags = Array(trace[:domain_tags])
+                  next false if domain_tag && !tags.include?(domain_tag)
+                  next true unless scope.key?(:identity)
+
+                  identity = scope[:identity].to_s
+                  tags.all? do |tag|
+                    tag = tag.to_s
+                    next true unless tag.start_with?('partner:', 'owner:')
+
+                    !identity.strip.empty? && ["partner:#{identity}", "owner:#{identity}"].include?(tag)
+                  end
+                end
+              end
 
               def persist_store(store)
                 store.flush if store.respond_to?(:flush)

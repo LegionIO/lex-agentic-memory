@@ -261,7 +261,7 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::Store do
     end
   end
 
-  describe 'parse_db_json nil/empty guard (log spam regression)' do
+  describe 'local persistence' do
     let(:local_db) do
       d = Sequel.sqlite
       d.create_table(:memory_traces) do
@@ -330,6 +330,23 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::Store do
       expect(trace[:domain_tags]).to eq([])
       expect(trace[:associated_traces]).to eq([])
       expect(trace[:child_trace_ids]).to eq([])
+    end
+
+    it 'does not resurrect deleted association references after a restart' do
+      store.store(semantic_trace)
+      store.store(episodic_trace)
+      trace_helper::COACTIVATION_THRESHOLD.times do
+        store.record_coactivation(semantic_trace[:trace_id], episodic_trace[:trace_id])
+      end
+      store.flush
+
+      store.delete(episodic_trace[:trace_id])
+      store.flush
+      restarted = described_class.new
+
+      expect(restarted.get(episodic_trace[:trace_id])).to be_nil
+      expect(restarted.get(semantic_trace[:trace_id])[:associated_traces]).to eq([])
+      expect(restarted.retrieve_associated(semantic_trace[:trace_id])).to eq([])
     end
   end
 
