@@ -22,7 +22,7 @@ module Legion
               end
 
               def time
-                60
+                Legion::Extensions::Agentic::Memory::Trace::Helpers::Decay::TICK_INTERVAL
               end
 
               def run_now?

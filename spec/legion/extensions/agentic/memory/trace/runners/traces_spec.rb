@@ -58,6 +58,74 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Runners::Traces do
     end
   end
 
+  describe 'scoped retrieval' do
+    let(:alice) do
+      client.store_trace(type: :semantic, content_payload: { fact: 'alice work' }, domain_tags: ['work', 'partner:alice'])
+    end
+    let(:bob) do
+      client.store_trace(type: :identity, content_payload: { fact: 'bob work' }, domain_tags: ['work', 'owner:bob'])
+    end
+    let(:unrelated) do
+      client.store_trace(type: :identity, content_payload: { fact: 'alice home' }, domain_tags: ['home', 'partner:alice'])
+    end
+    let(:ids) { [alice, bob, unrelated].map { |trace| trace[:trace_id] } }
+
+    it 'filters ranked candidates by principal and domain without reinforcing them' do
+      before = client.get_trace(trace_id: alice[:trace_id])[:trace].dup
+
+      result = client.retrieve_ranked(trace_ids: ids, domain_tag: 'work', identity: 'alice')
+
+      expect(result[:traces].map { |entry| entry[:trace][:trace_id] }).to eq([alice[:trace_id]])
+      expect(result[:traces].first[:score]).to be > 0
+      expect(client.get_trace(trace_id: alice[:trace_id])[:trace]).to eq(before)
+    end
+
+    it 'does not return private or conflicting-owner traces to an anonymous or different principal' do
+      shared = client.store_trace(type: :semantic, content_payload: { fact: 'public' }, domain_tags: ['work'])
+      mixed = client.store_trace(type: :semantic, content_payload: {},
+                                 domain_tags: ['work', 'partner:alice', 'owner:bob'])
+      candidates = ids + [shared[:trace_id], mixed[:trace_id]]
+
+      anonymous = client.retrieve_ranked(trace_ids: candidates, identity: nil)
+      scoped = client.retrieve_ranked(trace_ids: candidates, domain_tag: 'work', identity: 'alice')
+
+      expect(anonymous[:traces].map { |entry| entry[:trace][:trace_id] }).to eq([shared[:trace_id]])
+      expect(scoped[:traces].map { |entry| entry[:trace][:trace_id] }).to contain_exactly(alice[:trace_id], shared[:trace_id])
+    end
+
+    it 'keeps unscoped explicit candidate ranking available to standalone callers' do
+      result = client.retrieve_ranked(trace_ids: ids)
+
+      expect(result[:traces].map { |entry| entry[:trace][:trace_id] }).to contain_exactly(*ids)
+      expect(client.retrieve_ranked[:traces]).to eq([])
+    end
+
+    it 'reinforces only authorized relevant candidates before applying the limit' do
+      result = client.retrieve_and_reinforce(trace_ids: ids + [alice[:trace_id]], domain_tag: 'work', identity: 'alice', limit: 1)
+
+      expect(result[:traces].map { |trace| trace[:trace_id] }).to eq([alice[:trace_id]])
+      expect(client.get_trace(trace_id: alice[:trace_id])[:trace][:reinforcement_count]).to eq(1)
+      expect(client.get_trace(trace_id: bob[:trace_id])[:trace][:reinforcement_count]).to eq(0)
+      expect(client.get_trace(trace_id: unrelated[:trace_id])[:trace][:reinforcement_count]).to eq(0)
+    end
+
+    it 'does not fall back to global traces when an explicit candidate list is empty' do
+      alice
+
+      expect(client.retrieve_and_reinforce(trace_ids: [])).to eq(count: 0, traces: [])
+      expect(client.get_trace(trace_id: alice[:trace_id])[:trace][:reinforcement_count]).to eq(0)
+    end
+
+    it 'selects domain candidates from the store when no ids are supplied' do
+      ids
+
+      result = client.retrieve_and_reinforce(domain_tag: 'work', identity: 'alice', limit: 1)
+
+      expect(result[:traces].map { |trace| trace[:trace_id] }).to eq([alice[:trace_id]])
+      expect(client.get_trace(trace_id: bob[:trace_id])[:trace][:reinforcement_count]).to eq(0)
+    end
+  end
+
   describe '#delete_trace' do
     it 'removes a trace' do
       stored = client.store_trace(type: :semantic, content_payload: {})

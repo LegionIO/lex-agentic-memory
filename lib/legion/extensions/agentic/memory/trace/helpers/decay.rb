@@ -7,6 +7,8 @@ module Legion
         module Trace
           module Helpers
             module Decay
+              TICK_INTERVAL = 60
+
               module_function
 
               # Power-law decay formula from spec:

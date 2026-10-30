@@ -17,15 +17,12 @@ module Legion
               include Legion::Logging::Helper if defined?(Legion::Logging::Helper)
               include Legion::Cache::Helper if defined?(Legion::Cache::Helper)
 
-              TRACE_PREFIX = 'legion:memory:trace:'
-              INDEX_KEY    = 'legion:memory:trace_index'
-              ASSOC_KEY    = 'legion:memory:associations'
               TTL          = 86_400 # 24 hours
               FLUSH_BATCH  = 500    # traces per flush batch
 
               attr_reader :traces, :associations
 
-              def initialize
+              def initialize(partition_id: nil)
                 log.info('[memory] CacheStore initialized (memcached-backed, per-key)')
                 @mutex        = Mutex.new
                 @traces       = {}
@@ -33,12 +30,16 @@ module Legion
                 @dirty_ids    = Set.new
                 @deleted_ids  = Set.new
                 @assoc_dirty  = false
+                @partition_id = partition_id || Helpers::Trace.default_partition_id
+                # Global legacy cache keys cannot establish agent ownership and must not be hydrated.
+                @cache_prefix = "legion:memory:partition:#{@partition_id}:"
                 load_index
                 log.info("[memory] CacheStore loaded #{@traces.size} traces from cache")
               end
 
               def store(trace)
                 normalized_trace = Helpers::Trace.normalize_trace_affect(trace)
+                normalized_trace[:partition_id] ||= @partition_id
                 @mutex.synchronize do
                   @traces[normalized_trace[:trace_id]] = normalized_trace
                   @dirty_ids << normalized_trace[:trace_id]
@@ -53,6 +54,9 @@ module Legion
               def delete(trace_id)
                 @mutex.synchronize do
                   @traces.delete(trace_id)
+                  @traces.each_value do |trace|
+                    @dirty_ids << trace[:trace_id] if trace[:associated_traces]&.delete(trace_id)
+                  end
                   @associations.delete(trace_id)
                   @associations.each_value { |links| links.delete(trace_id) }
                   @dirty_ids.delete(trace_id)
@@ -96,7 +100,10 @@ module Legion
                   @associations[trace_id_b][trace_id_a] = (@associations[trace_id_b][trace_id_a] || 0) + 1
 
                   threshold = Helpers::Trace::COACTIVATION_THRESHOLD
-                  link_traces(trace_id_a, trace_id_b) if @associations[trace_id_a][trace_id_b] >= threshold
+                  if @associations[trace_id_a][trace_id_b] >= threshold && link_traces(trace_id_a, trace_id_b)
+                    @dirty_ids << trace_id_a
+                    @dirty_ids << trace_id_b
+                  end
                   @assoc_dirty = true
                 end
               end
@@ -173,11 +180,16 @@ module Legion
               private
 
               def trace_key(trace_id)
-                "#{TRACE_PREFIX}#{trace_id}"
+                "#{@cache_prefix}trace:#{trace_id}"
               end
 
               def load_index
-                index = cache_get(INDEX_KEY)
+                legacy_index = cache_get('legion:memory:trace_index')
+                if legacy_index.is_a?(Array) && !legacy_index.empty?
+                  log.warn('[memory] Ignoring legacy global cache history: agent ownership is ambiguous; legacy keys remain untouched')
+                end
+
+                index = cache_get("#{@cache_prefix}index")
                 return unless index.is_a?(Array)
 
                 loaded = 0
@@ -186,6 +198,14 @@ module Legion
                   if trace
                     @traces[id] = trace
                     loaded += 1
+                  end
+                end
+                associations = cache_get("#{@cache_prefix}associations")
+                if associations.is_a?(Hash)
+                  @associations = associations.each_with_object({}) do |(id, links), restored|
+                    next unless @traces.key?(id)
+
+                    restored[id] = links.select { |target, _count| @traces.key?(target) }
                   end
                 end
                 log.debug("[memory] CacheStore loaded #{loaded}/#{index.size} traces from index")
@@ -213,7 +233,7 @@ module Legion
               def flush_associations
                 return unless @assoc_dirty
 
-                cache_set(ASSOC_KEY, strip_default_procs(@associations), ttl: TTL)
+                cache_set("#{@cache_prefix}associations", strip_default_procs(@associations), ttl: TTL)
                 @assoc_dirty = false
               rescue StandardError => e
                 log.warn("[memory] CacheStore flush_associations failed (#{@associations.size} entries): #{e.message}")
@@ -222,7 +242,7 @@ module Legion
               def flush_index
                 return if @dirty_ids.empty? && @deleted_ids.empty?
 
-                cache_set(INDEX_KEY, @traces.keys, ttl: TTL)
+                cache_set("#{@cache_prefix}index", @traces.keys, ttl: TTL)
               rescue StandardError => e
                 log.warn("[memory] CacheStore flush_index failed (#{@traces.size} traces): #{e.message}")
               end
@@ -239,10 +259,16 @@ module Legion
                 return unless trace_a && trace_b
 
                 max = Helpers::Trace::MAX_ASSOCIATIONS
-                trace_a[:associated_traces] << id_b unless trace_a[:associated_traces].include?(id_b) || trace_a[:associated_traces].size >= max
-                return if trace_b[:associated_traces].include?(id_a) || trace_b[:associated_traces].size >= max
-
-                trace_b[:associated_traces] << id_a
+                changed = false
+                unless trace_a[:associated_traces].include?(id_b) || trace_a[:associated_traces].size >= max
+                  trace_a[:associated_traces] << id_b
+                  changed = true
+                end
+                unless trace_b[:associated_traces].include?(id_a) || trace_b[:associated_traces].size >= max
+                  trace_b[:associated_traces] << id_a
+                  changed = true
+                end
+                changed
               end
             end
           end

@@ -123,7 +123,7 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::ErrorTracer 
       described_class.instance_variable_set(:@write_queue, worker_queue)
       allow(runner_double).to receive(:store_trace).and_raise(StandardError, 'db down')
 
-      # rubocop:disable ThreadSafety/NewThread
+      # rubocop:disable-next ThreadSafety/NewThread
       worker = Thread.new do
         payload = worker_queue.pop
         break if payload == :stop
@@ -132,7 +132,6 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::ErrorTracer 
       rescue StandardError
         nil
       end
-      # rubocop:enable ThreadSafety/NewThread
 
       described_class.send(:record_trace, 'store failure', :error)
       expect { worker.join(2) }.not_to raise_error
@@ -142,7 +141,7 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::ErrorTracer 
       dedicated_queue = Queue.new
       described_class.instance_variable_set(:@write_queue, dedicated_queue)
 
-      # rubocop:disable ThreadSafety/NewThread
+      # rubocop:disable-next ThreadSafety/NewThread
       worker = Thread.new do
         loop do
           payload = dedicated_queue.pop
@@ -155,7 +154,6 @@ RSpec.describe Legion::Extensions::Agentic::Memory::Trace::Helpers::ErrorTracer 
           nil
         end
       end
-      # rubocop:enable ThreadSafety/NewThread
 
       described_class.send(:record_trace, '[mycomponent] disk full', :error)
       dedicated_queue.push(:stop)

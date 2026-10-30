@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0] - 2026-10-29
+### Changed
+- Partition fallback-cache traces, indexes, and associations by agent. Ambiguous legacy global cache history is not hydrated; existing global keys are left untouched and a warning explains the cold start.
+- Do not roll cache-backed deployments back to unpartitioned readers without controlled cache recovery: old readers cannot see new partitioned writes and can expose surviving global history.
+### Fixed
+- Apply trace, domain, and identity selectors before ranking, limiting, or reinforcement; explicit empty candidates select nothing and duplicate candidates reinforce only once.
+- Preserve ranked `{ trace:, score: }` results and legacy omitted-identity behavior. Explicit anonymous identity excludes partner/owner-scoped traces.
+- Derive default decay age from persisted last reinforcement time using the existing 60-second interval, preserving explicit age overrides and preventing maintenance from increasing strength.
+- Persist deletion of surviving association references and restore scoped coactivation progress across cache restarts.
+
 ## [0.1.41] - 2026-07-22
 ### Added
 - `Runners::Traces#erase_partner!(identity:)` — deletes all traces tagged `partner:<identity>` and `owner:<identity>`; returns `{ erased: true, identity:, count: }`. Prep for H8 death protocol cascade (Phase 4.5 contract gate gap).
